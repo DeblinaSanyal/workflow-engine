@@ -7,6 +7,11 @@ export const CustomNode: React.FC<NodeProps> = ({ id, data, selected }) => {
   const { deleteNode, setSelectedNode } = useWorkflowStore();
   const metadata = data.metadata;
 
+  // Don't render ghost nodes
+  if (data.isGhost) {
+    return null;
+  }
+
   const getCategoryColor = (category: string) => {
     switch (category) {
       case 'trigger': return {

@@ -63,7 +63,7 @@ export const NodePalette: React.FC = () => {
   };
 
   return (
-    <div className="w-80 bg-gradient-to-b from-gray-50 to-white border-r border-gray-200 flex flex-col h-full shadow-sm">
+    <div className="w-full bg-gradient-to-b from-gray-50 to-white border-r border-gray-200 flex flex-col h-full shadow-sm overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-gray-200 bg-white">
         <h2 className="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2">

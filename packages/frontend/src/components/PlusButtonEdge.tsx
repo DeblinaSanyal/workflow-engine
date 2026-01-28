@@ -1,0 +1,76 @@
+import React from 'react';
+import { EdgeProps, getBezierPath, EdgeLabelRenderer } from 'reactflow';
+import { Plus } from 'lucide-react';
+
+interface PlusButtonEdgeProps extends EdgeProps {
+  data?: {
+    onPlusClick?: (edgeId: string, position: { x: number; y: number }) => void;
+  };
+}
+
+export const PlusButtonEdge: React.FC<PlusButtonEdgeProps> = ({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style = {},
+  markerEnd,
+  data,
+}) => {
+  const [edgePath] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+
+  const handlePlusClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (data?.onPlusClick) {
+      data.onPlusClick(id, { x: targetX, y: targetY });
+    }
+  };
+
+  return (
+    <>
+      <path
+        id={id}
+        style={{
+          ...style,
+          strokeDasharray: '8, 8',
+          stroke: '#3b82f6',
+          strokeWidth: 2.5,
+          animation: 'dashAnimation 1s linear infinite',
+        }}
+        className="react-flow__edge-path"
+        d={edgePath}
+        markerEnd={markerEnd}
+      />
+
+      <EdgeLabelRenderer>
+        <div
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${targetX}px,${targetY}px)`,
+            pointerEvents: 'all',
+          }}
+          className="nodrag nopan"
+        >
+          <button
+            onClick={handlePlusClick}
+            className="group relative flex items-center justify-center w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-full border-3 border-white shadow-lg transition-all hover:scale-125 active:scale-110 animate-subtle-pulse"
+            title="Add next node"
+          >
+            <Plus size={22} strokeWidth={3} />
+            <span className="absolute inset-0 rounded-full bg-blue-400 opacity-0 group-hover:opacity-30 group-hover:scale-150 transition-all duration-500"></span>
+          </button>
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+};

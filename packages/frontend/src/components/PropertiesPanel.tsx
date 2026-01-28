@@ -14,7 +14,7 @@ export const PropertiesPanel: React.FC = () => {
 
   if (!selectedNode) {
     return (
-      <div className="w-80 bg-white border-l border-gray-200 flex items-center justify-center text-gray-500">
+      <div className="w-full bg-white border-l border-gray-200 flex items-center justify-center text-gray-500 overflow-hidden">
         <p>Select a node to configure</p>
       </div>
     );
@@ -117,7 +117,7 @@ export const PropertiesPanel: React.FC = () => {
   };
 
   return (
-    <div className="w-80 bg-white border-l border-gray-200 flex flex-col h-full">
+    <div className="w-full bg-white border-l border-gray-200 flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-gray-200 flex justify-between items-center">
         <h2 className="text-lg font-bold text-gray-800">Properties</h2>

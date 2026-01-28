@@ -9,6 +9,14 @@ interface HistoryState {
   edges: Edge[];
 }
 
+// Pending edge for plus button workflow building
+export interface PendingEdge {
+  id: string;
+  sourceNodeId: string;
+  sourceHandle: string;
+  position: { x: number; y: number };
+}
+
 const MAX_HISTORY_SIZE = 50;
 
 // Favorites localStorage helpers
@@ -40,17 +48,20 @@ interface WorkflowStore {
   workflowName: string;
   workflowDescription?: string;
   workflowStatus: 'ACTIVE' | 'INACTIVE' | 'ERROR';
-  
+
   // Flow state
   nodes: Node[];
   edges: Edge[];
-  
+
+  // Pending edges for plus button workflow building
+  pendingEdges: PendingEdge[];
+
   // Available node types
   nodeTypes: NodeMetadata[];
-  
+
   // UI state
   selectedNode: Node | null;
-  
+
   // Clipboard
   clipboard: Node[];
 
@@ -95,6 +106,10 @@ interface WorkflowStore {
   isFavorite: (nodeName: string) => boolean;
   getFavoriteNodes: () => NodeMetadata[];
 
+  // Pending edges operations
+  addNodeFromPendingEdge: (pendingEdgeId: string, nodeType: string) => void;
+  removePendingEdge: (pendingEdgeId: string) => void;
+
   // Convert to API format
   toWorkflowData: () => Omit<Workflow, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -107,6 +122,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   workflowStatus: 'INACTIVE',
   nodes: [],
   edges: [],
+  pendingEdges: [],
   nodeTypes: [],
   selectedNode: null,
   clipboard: [],
@@ -152,7 +168,10 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
   addNode: (type, position) => {
     const nodeType = get().nodeTypes.find(nt => nt.name === type);
-    if (!nodeType) return;
+    if (!nodeType) {
+      console.warn('[WorkflowStore] Node type not found:', type);
+      return;
+    }
 
     const newNode: Node = {
       id: uuidv4(),
@@ -166,7 +185,48 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       }
     };
 
-    set({ nodes: [...get().nodes, newNode] });
+    const newPendingEdges: PendingEdge[] = [];
+
+    // Create pending edges for all output handles if node has outputs
+    if (nodeType.outputs && nodeType.outputs.length > 0) {
+      console.log('[WorkflowStore] Creating pending edges for outputs:', nodeType.outputs);
+      nodeType.outputs.forEach((output, index) => {
+        const pendingEdge: PendingEdge = {
+          id: uuidv4(),
+          sourceNodeId: newNode.id,
+          sourceHandle: output.name || 'default',
+          position: {
+            x: position.x + 300,
+            y: position.y + (index * 60) // Offset each pending edge vertically
+          }
+        };
+        newPendingEdges.push(pendingEdge);
+      });
+    } else {
+      console.log('[WorkflowStore] No outputs found, creating default pending edge');
+      // If no outputs metadata, create a single default pending edge
+      const pendingEdge: PendingEdge = {
+        id: uuidv4(),
+        sourceNodeId: newNode.id,
+        sourceHandle: 'default',
+        position: {
+          x: position.x + 300,
+          y: position.y
+        }
+      };
+      newPendingEdges.push(pendingEdge);
+    }
+
+    console.log('[WorkflowStore] Adding node with pending edges:', {
+      node: newNode,
+      pendingEdges: newPendingEdges,
+      totalPendingEdges: [...get().pendingEdges, ...newPendingEdges].length
+    });
+
+    set({
+      nodes: [...get().nodes, newNode],
+      pendingEdges: [...get().pendingEdges, ...newPendingEdges]
+    });
   },
 
   onNodesChange: (changes) => {
@@ -182,8 +242,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   onConnect: (connection) => {
+    // Remove any pending edge from the source node's source handle
+    const updatedPendingEdges = get().pendingEdges.filter(
+      pe => !(pe.sourceNodeId === connection.source && pe.sourceHandle === connection.sourceHandle)
+    );
+
     set({
-      edges: addEdge({ ...connection, id: uuidv4() }, get().edges)
+      edges: addEdge({ ...connection, id: uuidv4() }, get().edges),
+      pendingEdges: updatedPendingEdges
     });
   },
 
@@ -201,6 +267,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set({
       nodes: get().nodes.filter(n => n.id !== nodeId),
       edges: get().edges.filter(e => e.source !== nodeId && e.target !== nodeId),
+      pendingEdges: get().pendingEdges.filter(pe => pe.sourceNodeId !== nodeId),
       selectedNode: get().selectedNode?.id === nodeId ? null : get().selectedNode
     });
   },
@@ -439,6 +506,87 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     return nodeTypes.filter(node => favorites.has(node.name));
   },
 
+  // Add node from pending edge
+  addNodeFromPendingEdge: (pendingEdgeId, nodeType) => {
+    const pendingEdge = get().pendingEdges.find(pe => pe.id === pendingEdgeId);
+    if (!pendingEdge) return;
+
+    const nodeMetadata = get().nodeTypes.find(nt => nt.name === nodeType);
+    if (!nodeMetadata) return;
+
+    // Create new node at the pending edge target position
+    const newNode: Node = {
+      id: uuidv4(),
+      type: 'custom',
+      position: pendingEdge.position,
+      data: {
+        type: nodeMetadata.name,
+        name: nodeMetadata.displayName,
+        parameters: {},
+        metadata: nodeMetadata
+      }
+    };
+
+    // Find the source node's first input handle (or default)
+    const targetHandle = nodeMetadata.inputs && nodeMetadata.inputs.length > 0
+      ? nodeMetadata.inputs[0].name || 'default'
+      : 'default';
+
+    // Create regular edge from source to new node
+    const newEdge: Edge = {
+      id: uuidv4(),
+      source: pendingEdge.sourceNodeId,
+      target: newNode.id,
+      sourceHandle: pendingEdge.sourceHandle,
+      targetHandle: targetHandle
+    };
+
+    // Create pending edges for the new node's outputs
+    const newPendingEdges: PendingEdge[] = [];
+    if (nodeMetadata.outputs && nodeMetadata.outputs.length > 0) {
+      nodeMetadata.outputs.forEach((output, index) => {
+        const newPendingEdge: PendingEdge = {
+          id: uuidv4(),
+          sourceNodeId: newNode.id,
+          sourceHandle: output.name || 'default',
+          position: {
+            x: pendingEdge.position.x + 300,
+            y: pendingEdge.position.y + (index * 60)
+          }
+        };
+        newPendingEdges.push(newPendingEdge);
+      });
+    } else {
+      // Create default pending edge if no outputs metadata
+      const newPendingEdge: PendingEdge = {
+        id: uuidv4(),
+        sourceNodeId: newNode.id,
+        sourceHandle: 'default',
+        position: {
+          x: pendingEdge.position.x + 300,
+          y: pendingEdge.position.y
+        }
+      };
+      newPendingEdges.push(newPendingEdge);
+    }
+
+    // Remove the clicked pending edge and add new ones
+    const updatedPendingEdges = get().pendingEdges.filter(pe => pe.id !== pendingEdgeId);
+
+    set({
+      nodes: [...get().nodes, newNode],
+      edges: [...get().edges, newEdge],
+      pendingEdges: [...updatedPendingEdges, ...newPendingEdges]
+    });
+  },
+
+  // Remove a pending edge
+  removePendingEdge: (pendingEdgeId) => {
+    set({
+      pendingEdges: get().pendingEdges.filter(pe => pe.id !== pendingEdgeId)
+    });
+  },
+
   toWorkflowData: () => {
     const state = get();
 
@@ -474,6 +622,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     workflowStatus: 'INACTIVE',
     nodes: [],
     edges: [],
+    pendingEdges: [],
     selectedNode: null,
     clipboard: [],
     history: [],
