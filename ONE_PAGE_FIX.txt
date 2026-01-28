@@ -1,0 +1,53 @@
+# One-Page Quick Fix Reference
+
+## 3 Files to Edit (Windows Path Issues)
+
+### 1. HttpRequestNode.ts
+**Path:** `packages\backend\src\domain\nodes\implementations\HttpRequestNode.ts`  
+**Line 2:** Change `'./BaseNode'` → `'../BaseNode'`
+
+### 2. WorkflowEntity.ts
+**Path:** `packages\backend\src\infrastructure\database\entities\WorkflowEntity.ts`  
+**Line 2:** Change `'../../domain/entities/Workflow'` → `'../../../domain/entities/Workflow'`
+
+### 3. WorkflowExecutionEntity.ts
+**Path:** `packages\backend\src\infrastructure\database\entities\WorkflowExecutionEntity.ts`  
+**Line 2:** Change `'../../domain/entities/WorkflowExecution'` → `'../../../domain/entities/WorkflowExecution'`
+
+---
+
+## Run Commands
+
+```bash
+# Terminal 1: Backend
+cd packages\backend
+npm run dev:no-db
+
+# Terminal 2: Frontend  
+cd packages\frontend
+npm run dev
+```
+
+---
+
+## Verify Working
+
+**Backend:** http://localhost:3000/api/nodes (should show 3 nodes)  
+**Frontend:** http://localhost:5173 (click "New Workflow", see nodes in left panel)
+
+---
+
+## If Frontend Install Fails
+
+```bash
+cd packages\frontend
+npx update-browserslist-db@latest
+npm rebuild caniuse-lite
+npm run dev
+```
+
+---
+
+## Alternative: Download Fixed Version
+
+Download the updated `workflow-engine.tar.gz` - all fixes already applied.
