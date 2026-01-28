@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { useWorkflowStore } from '../stores/workflowStore';
-import { Search, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, Star } from 'lucide-react';
 
 export const NodePalette: React.FC = () => {
-  const { nodeTypes, addNode } = useWorkflowStore();
+  const { nodeTypes, toggleFavorite, isFavorite, getFavoriteNodes } = useWorkflowStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
-    new Set(['action', 'transform', 'control', 'integration'])
+    new Set(['favorites', 'action', 'transform', 'control', 'integration'])
   );
 
   const filteredNodes = nodeTypes.filter(node =>
@@ -16,6 +16,7 @@ export const NodePalette: React.FC = () => {
   );
 
   const categories = [
+    { key: 'favorites', label: 'Favorites', icon: '⭐' },
     { key: 'trigger', label: 'Triggers', icon: '⚡' },
     { key: 'action', label: 'Actions', icon: '⚙️' },
     { key: 'transform', label: 'Transform', icon: '🔄' },
@@ -24,15 +25,23 @@ export const NodePalette: React.FC = () => {
   ];
 
   const getCategoryNodes = (category: string) => {
+    if (category === 'favorites') {
+      const favoriteNodes = getFavoriteNodes();
+      return favoriteNodes.filter(node =>
+        node.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        node.description.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
     return filteredNodes.filter(node => node.category === category);
   };
 
   const getCategoryColor = (category: string) => {
     switch (category) {
+      case 'favorites': return 'bg-yellow-50 text-yellow-800 border-yellow-200 hover:bg-yellow-100';
       case 'trigger': return 'bg-green-50 text-green-800 border-green-200 hover:bg-green-100';
       case 'action': return 'bg-blue-50 text-blue-800 border-blue-200 hover:bg-blue-100';
       case 'transform': return 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100';
-      case 'control': return 'bg-yellow-50 text-yellow-800 border-yellow-200 hover:bg-yellow-100';
+      case 'control': return 'bg-orange-50 text-orange-800 border-orange-200 hover:bg-orange-100';
       case 'integration': return 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100';
       default: return 'bg-gray-50 text-gray-800 border-gray-200 hover:bg-gray-100';
     }
@@ -111,9 +120,17 @@ export const NodePalette: React.FC = () => {
               {isExpanded && (
                 <div className="p-2 space-y-2 bg-gray-50">
                   {nodes.length === 0 ? (
-                    <div className="text-center py-4 text-gray-500 text-sm">
-                      No nodes in this category
-                    </div>
+                    category.key === 'favorites' ? (
+                      <div className="text-center py-6 text-gray-500 text-sm">
+                        <Star size={32} className="mx-auto mb-2 text-gray-300" />
+                        <p>No favorites yet</p>
+                        <p className="text-xs mt-1">Click the star icon on any node to add it</p>
+                      </div>
+                    ) : (
+                      <div className="text-center py-4 text-gray-500 text-sm">
+                        No nodes in this category
+                      </div>
+                    )
                   ) : (
                     nodes.map(node => (
                       <div
@@ -125,7 +142,23 @@ export const NodePalette: React.FC = () => {
                         <div className="flex items-start gap-2 mb-1">
                           <span className="text-2xl">{node.icon || '⚙️'}</span>
                           <div className="flex-1 min-w-0">
-                            <div className="font-semibold text-sm truncate">{node.displayName}</div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-semibold text-sm truncate">{node.displayName}</div>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  toggleFavorite(node.name);
+                                }}
+                                className="flex-shrink-0 p-1 hover:bg-white/60 rounded transition-colors"
+                                title={isFavorite(node.name) ? "Remove from favorites" : "Add to favorites"}
+                              >
+                                <Star
+                                  size={14}
+                                  className={isFavorite(node.name) ? "fill-yellow-400 text-yellow-400" : "text-gray-400"}
+                                />
+                              </button>
+                            </div>
                             <p className="text-xs opacity-75 mt-0.5 line-clamp-2">{node.description}</p>
                           </div>
                         </div>

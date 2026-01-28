@@ -5,10 +5,11 @@ import { useWorkflowStore } from '../stores/workflowStore';
 interface KeyboardShortcutsOptions {
   onSave?: () => void;
   onExecute?: () => void;
+  onOpenCommandPalette?: () => void;
 }
 
 export const useKeyboardShortcuts = (options?: KeyboardShortcutsOptions) => {
-  const { onSave, onExecute } = options || {};
+  const { onSave, onExecute, onOpenCommandPalette } = options || {};
   const reactFlowInstance = useReactFlow();
   
   const {
@@ -21,6 +22,7 @@ export const useKeyboardShortcuts = (options?: KeyboardShortcutsOptions) => {
     selectAllNodes,
     undo,
     redo,
+    setSelectedNode,
   } = useWorkflowStore();
 
   const handleKeyDown = useCallback(
@@ -37,6 +39,104 @@ export const useKeyboardShortcuts = (options?: KeyboardShortcutsOptions) => {
 
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modifierKey = isMac ? event.metaKey : event.ctrlKey;
+
+      // Arrow keys - pan canvas
+      const PAN_AMOUNT = 50;
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        const viewport = reactFlowInstance.getViewport();
+
+        if (event.key === 'ArrowUp') {
+          reactFlowInstance.setViewport({
+            ...viewport,
+            y: viewport.y + PAN_AMOUNT
+          }, { duration: 100 });
+        } else if (event.key === 'ArrowDown') {
+          reactFlowInstance.setViewport({
+            ...viewport,
+            y: viewport.y - PAN_AMOUNT
+          }, { duration: 100 });
+        } else if (event.key === 'ArrowLeft') {
+          reactFlowInstance.setViewport({
+            ...viewport,
+            x: viewport.x + PAN_AMOUNT
+          }, { duration: 100 });
+        } else if (event.key === 'ArrowRight') {
+          reactFlowInstance.setViewport({
+            ...viewport,
+            x: viewport.x - PAN_AMOUNT
+          }, { duration: 100 });
+        }
+        return;
+      }
+
+      // Tab - cycle through nodes
+      if (event.key === 'Tab' && !modifierKey) {
+        event.preventDefault();
+        const visibleNodes = nodes.filter(n => !n.hidden);
+        if (visibleNodes.length === 0) return;
+
+        const currentIndex = visibleNodes.findIndex(n => n.selected);
+        let nextIndex;
+
+        if (event.shiftKey) {
+          // Shift+Tab: previous node
+          nextIndex = currentIndex <= 0 ? visibleNodes.length - 1 : currentIndex - 1;
+        } else {
+          // Tab: next node
+          nextIndex = currentIndex >= visibleNodes.length - 1 ? 0 : currentIndex + 1;
+        }
+
+        // Deselect all, select next
+        const changes = visibleNodes.map((node, idx) => ({
+          id: node.id,
+          type: 'select' as const,
+          selected: idx === nextIndex
+        }));
+
+        useWorkflowStore.getState().onNodesChange(changes);
+
+        // Pan viewport to center on selected node
+        const selectedNode = visibleNodes[nextIndex];
+        reactFlowInstance.setCenter(
+          selectedNode.position.x + 110, // half node width
+          selectedNode.position.y + 50,  // half node height
+          { duration: 200, zoom: reactFlowInstance.getZoom() }
+        );
+        return;
+      }
+
+      // Enter - open properties for selected node
+      if (event.key === 'Enter' && !modifierKey) {
+        const selectedNodes = nodes.filter(n => n.selected);
+        if (selectedNodes.length === 1) {
+          event.preventDefault();
+          setSelectedNode(selectedNodes[0]);
+        }
+        return;
+      }
+
+      // Space - toggle node selection
+      if (event.key === ' ' && !modifierKey) {
+        const selectedNodes = nodes.filter(n => n.selected);
+        if (selectedNodes.length === 1) {
+          event.preventDefault();
+          const changes = [{
+            id: selectedNodes[0].id,
+            type: 'select' as const,
+            selected: false
+          }];
+          useWorkflowStore.getState().onNodesChange(changes);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+K - open command palette
+      if (modifierKey && event.key === 'k') {
+        event.preventDefault();
+        onOpenCommandPalette?.();
+        return;
+      }
 
       // Delete selected nodes (Delete or Backspace)
       if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -175,6 +275,8 @@ export const useKeyboardShortcuts = (options?: KeyboardShortcutsOptions) => {
       redo,
       onSave,
       onExecute,
+      onOpenCommandPalette,
+      setSelectedNode,
       reactFlowInstance,
     ]
   );
@@ -189,6 +291,12 @@ export const useKeyboardShortcuts = (options?: KeyboardShortcutsOptions) => {
 
 // Export keyboard shortcut definitions for display in UI
 export const KEYBOARD_SHORTCUTS = [
+  { key: '↑ ↓ ← →', description: 'Pan canvas view' },
+  { key: 'Tab', description: 'Cycle to next node' },
+  { key: 'Shift + Tab', description: 'Cycle to previous node' },
+  { key: 'Enter', description: 'Open properties for selected node' },
+  { key: 'Space', description: 'Toggle node selection' },
+  { key: 'Ctrl/Cmd + K', description: 'Open command palette' },
   { key: 'Delete / Backspace', description: 'Delete selected nodes' },
   { key: 'Ctrl/Cmd + C', description: 'Copy selected nodes' },
   { key: 'Ctrl/Cmd + V', description: 'Paste nodes' },

@@ -11,6 +11,29 @@ interface HistoryState {
 
 const MAX_HISTORY_SIZE = 50;
 
+// Favorites localStorage helpers
+const FAVORITES_STORAGE_KEY = 'workflow-favorites';
+
+const loadFavoritesFromStorage = (): Set<string> => {
+  try {
+    const stored = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (stored) {
+      return new Set(JSON.parse(stored));
+    }
+  } catch (error) {
+    console.error('Failed to load favorites:', error);
+  }
+  return new Set();
+};
+
+const saveFavoritesToStorage = (favorites: Set<string>) => {
+  try {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(Array.from(favorites)));
+  } catch (error) {
+    console.error('Failed to save favorites:', error);
+  }
+};
+
 interface WorkflowStore {
   // Workflow metadata
   workflowId?: string;
@@ -30,11 +53,14 @@ interface WorkflowStore {
   
   // Clipboard
   clipboard: Node[];
-  
+
   // History for undo/redo
   history: HistoryState[];
   historyIndex: number;
-  
+
+  // Favorites
+  favorites: Set<string>;
+
   // Actions
   setWorkflow: (workflow: Workflow) => void;
   setWorkflowName: (name: string) => void;
@@ -63,10 +89,15 @@ interface WorkflowStore {
   undo: () => void;
   redo: () => void;
   saveToHistory: () => void;
-  
+
+  // Favorites operations
+  toggleFavorite: (nodeName: string) => void;
+  isFavorite: (nodeName: string) => boolean;
+  getFavoriteNodes: () => NodeMetadata[];
+
   // Convert to API format
   toWorkflowData: () => Omit<Workflow, 'id' | 'createdAt' | 'updatedAt'>;
-  
+
   // Reset
   reset: () => void;
 }
@@ -81,6 +112,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   clipboard: [],
   history: [],
   historyIndex: -1,
+  favorites: loadFavoritesFromStorage(),
 
   setWorkflow: (workflow) => {
     // Convert workflow nodes to React Flow nodes
@@ -201,7 +233,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
   // Copy selected nodes to clipboard
   copySelectedNodes: () => {
-    const { nodes, edges } = get();
+    const { nodes } = get();
     const selectedNodes = nodes.filter((node) => node.selected);
     
     if (selectedNodes.length === 0) return;
@@ -214,7 +246,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
   // Paste nodes from clipboard
   pasteNodes: () => {
-    const { clipboard, nodes, edges, nodeTypes } = get();
+    const { clipboard, nodes, edges } = get();
     
     if (clipboard.length === 0) return;
     
@@ -385,9 +417,31 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     });
   },
 
+  // Favorites operations
+  toggleFavorite: (nodeName) => {
+    const favorites = new Set(get().favorites);
+    if (favorites.has(nodeName)) {
+      favorites.delete(nodeName);
+    } else {
+      favorites.add(nodeName);
+    }
+
+    saveFavoritesToStorage(favorites);
+    set({ favorites });
+  },
+
+  isFavorite: (nodeName) => {
+    return get().favorites.has(nodeName);
+  },
+
+  getFavoriteNodes: () => {
+    const { nodeTypes, favorites } = get();
+    return nodeTypes.filter(node => favorites.has(node.name));
+  },
+
   toWorkflowData: () => {
     const state = get();
-    
+
     const nodes: WorkflowNode[] = state.nodes.map(node => ({
       id: node.id,
       type: node.data.type,
@@ -424,5 +478,6 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     clipboard: [],
     history: [],
     historyIndex: -1,
+    favorites: loadFavoritesFromStorage(), // Keep favorites on reset
   })
 }));

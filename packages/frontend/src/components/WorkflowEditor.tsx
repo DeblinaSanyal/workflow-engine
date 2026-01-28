@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, DragEvent } from 'react';
+import React, { useCallback, useRef, DragEvent, useState } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -12,6 +12,8 @@ import { CustomNode } from './CustomNode';
 import { NodePalette } from './NodePalette';
 import { PropertiesPanel } from './PropertiesPanel';
 import { WorkflowToolbar } from './WorkflowToolbar';
+import { CommandPalette } from './CommandPalette';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 const nodeTypes = {
   custom: CustomNode
@@ -29,6 +31,12 @@ const WorkflowEditorContent: React.FC = () => {
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [reactFlowInstance, setReactFlowInstance] = React.useState<any>(null);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  // Enable keyboard shortcuts
+  useKeyboardShortcuts({
+    onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
+  });
 
   const onDragOver = useCallback((event: DragEvent) => {
     event.preventDefault();
@@ -92,6 +100,12 @@ const WorkflowEditorContent: React.FC = () => {
 
       {/* Properties Panel */}
       <PropertiesPanel />
+
+      {/* Command Palette */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+      />
     </div>
   );
 };
