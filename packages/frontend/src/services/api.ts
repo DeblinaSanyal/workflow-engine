@@ -23,7 +23,7 @@ export interface Workflow {
   nodes: WorkflowNode[];
   connections: WorkflowConnection[];
   settings?: any;
-  status: 'ACTIVE' | 'INACTIVE' | 'ERROR';
+  status: 'ACTIVE' | 'INACTIVE' | 'DRAFT' | 'ERROR';
   tags?: string[];
   createdAt: string;
   updatedAt: string;

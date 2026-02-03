@@ -4,27 +4,32 @@ import ReactFlow, {
   Controls,
   MiniMap,
   ReactFlowProvider,
-  Panel,
-  Edge
+  Edge,
+  useReactFlow
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { CustomNode } from './CustomNode';
-import { NodePalette } from './NodePalette';
+import { StartNode } from './StartNode';
+import { LeftSidebar } from './LeftSidebar';
 import { PropertiesPanel } from './PropertiesPanel';
 import { WorkflowToolbar } from './WorkflowToolbar';
 import { CommandPalette } from './CommandPalette';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import ResizablePanel from './ResizablePanel';
 import { PlusButtonEdge } from './PlusButtonEdge';
+import { RegularPlusButtonEdge } from './RegularPlusButtonEdge';
 import { AddNodeMenu } from './AddNodeMenu';
 
+
 const nodeTypes = {
-  custom: CustomNode
+  custom: CustomNode,
+  start: StartNode
 };
 
 const edgeTypes = {
-  pending: PlusButtonEdge
+  pending: PlusButtonEdge,
+  default: RegularPlusButtonEdge
 };
 
 const WorkflowEditorContent: React.FC = () => {
@@ -37,16 +42,18 @@ const WorkflowEditorContent: React.FC = () => {
     onConnect,
     addNode,
     nodeTypes: availableNodeTypes,
-    addNodeFromPendingEdge
+    addNodeFromPendingEdge,
+    insertNodeOnEdge
   } = useWorkflowStore();
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const [reactFlowInstance, setReactFlowInstance] = React.useState<any>(null);
+  const reactFlowInstance = useReactFlow();
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [addNodeMenuState, setAddNodeMenuState] = useState<{
     isOpen: boolean;
-    pendingEdgeId: string;
+    edgeId: string;
     position: { x: number; y: number };
+    isRegularEdge: boolean;
   } | null>(null);
 
   // Enable keyboard shortcuts
@@ -63,25 +70,52 @@ const WorkflowEditorContent: React.FC = () => {
     (event: DragEvent) => {
       event.preventDefault();
 
-      const type = event.dataTransfer.getData('application/reactflow');
-      if (!type || !reactFlowInstance) return;
+      if (!reactFlowInstance) return;
 
       const position = reactFlowInstance.screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
       });
 
-      addNode(type, position);
+      // Check if it's a workflow being dragged (check this first!)
+      const workflowData = event.dataTransfer.getData('application/workflow');
+      if (workflowData) {
+        try {
+          const workflow = JSON.parse(workflowData);
+          useWorkflowStore.getState().addWorkflowAsSubworkflow(workflow, position);
+          return;
+        } catch (error) {
+          console.error('Failed to parse workflow data:', error);
+        }
+      }
+
+      // Check if it's a node type being dragged
+      const nodeType = event.dataTransfer.getData('application/reactflow');
+      if (nodeType) {
+        addNode(nodeType, position);
+        return;
+      }
     },
     [reactFlowInstance, addNode]
   );
 
   // Handle plus button click on pending edges
-  const handlePlusClick = useCallback((edgeId: string, screenPosition: { x: number; y: number }) => {
+  const handlePendingEdgePlusClick = useCallback((edgeId: string, screenPosition: { x: number; y: number }) => {
     setAddNodeMenuState({
       isOpen: true,
-      pendingEdgeId: edgeId,
-      position: screenPosition
+      edgeId: edgeId,
+      position: screenPosition,
+      isRegularEdge: false
+    });
+  }, []);
+
+  // Handle plus button click on regular edges
+  const handleRegularEdgePlusClick = useCallback((edgeId: string, screenPosition: { x: number; y: number }) => {
+    setAddNodeMenuState({
+      isOpen: true,
+      edgeId: edgeId,
+      position: screenPosition,
+      isRegularEdge: true
     });
   }, []);
 
@@ -125,30 +159,34 @@ const WorkflowEditorContent: React.FC = () => {
       source: pe.sourceNodeId,
       target: 'ghost-' + pe.id,
       sourceHandle: pe.sourceHandle,
+      targetHandle: 'default', // Add default target handle for ghost nodes
       type: 'pending',
       data: {
-        onPlusClick: handlePlusClick
+        onPlusClick: handlePendingEdgePlusClick
       },
       selectable: false,
       deletable: true,
     }));
 
-    console.log('[WorkflowEditor] Rendering with pending edges:', {
-      pendingEdgesCount: pendingEdges.length,
-      pendingEdges: pendingEdges,
-      ghostNodesCount: ghostNodes.length,
-      pendingEdgesAsReactFlow: pendingEdgesAsReactFlow
-    });
+    // Add plus button data to regular edges
+    const regularEdgesWithPlusButton: Edge[] = edges.map(edge => ({
+      ...edge,
+      type: edge.type || 'default',
+      data: {
+        ...edge.data,
+        onPlusClick: handleRegularEdgePlusClick
+      }
+    }));
 
     return {
       allNodes: [...nodes, ...ghostNodes],
-      allEdges: [...edges, ...pendingEdgesAsReactFlow]
+      allEdges: [...regularEdgesWithPlusButton, ...pendingEdgesAsReactFlow]
     };
-  }, [nodes, edges, pendingEdges, handlePlusClick]);
+  }, [nodes, edges, pendingEdges, handlePendingEdgePlusClick, handleRegularEdgePlusClick]);
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Node Palette */}
+      {/* Left Sidebar (Node Library + Workflows) */}
       <ResizablePanel
         side="left"
         minWidth={240}
@@ -156,7 +194,7 @@ const WorkflowEditorContent: React.FC = () => {
         defaultWidth={320}
         storageKey="workflow-panel-left-width"
       >
-        <NodePalette />
+        <LeftSidebar />
       </ResizablePanel>
 
       {/* Main Canvas */}
@@ -172,23 +210,20 @@ const WorkflowEditorContent: React.FC = () => {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            onInit={setReactFlowInstance}
             onDrop={onDrop}
             onDragOver={onDragOver}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             fitView
             attributionPosition="bottom-left"
+
           >
             <Background />
             <Controls />
             <MiniMap />
 
-            <Panel position="top-center" className="bg-white/90 backdrop-blur px-4 py-2 rounded-lg shadow-md">
-              <p className="text-sm text-gray-600">
-                Drag nodes from the left panel onto the canvas
-              </p>
-            </Panel>
+
+
           </ReactFlow>
         </div>
       </div>
@@ -216,7 +251,18 @@ const WorkflowEditorContent: React.FC = () => {
           position={addNodeMenuState.position}
           onClose={() => setAddNodeMenuState(null)}
           onSelectNode={(nodeType) => {
-            addNodeFromPendingEdge(addNodeMenuState.pendingEdgeId, nodeType);
+            if (addNodeMenuState.isRegularEdge) {
+              // Convert screen position to flow position for regular edges
+              if (reactFlowInstance) {
+                const flowPosition = reactFlowInstance.screenToFlowPosition({
+                  x: addNodeMenuState.position.x,
+                  y: addNodeMenuState.position.y
+                });
+                insertNodeOnEdge(addNodeMenuState.edgeId, nodeType, flowPosition);
+              }
+            } else {
+              addNodeFromPendingEdge(addNodeMenuState.edgeId, nodeType);
+            }
             setAddNodeMenuState(null);
           }}
           availableNodes={availableNodeTypes.map(nt => ({
@@ -227,6 +273,7 @@ const WorkflowEditorContent: React.FC = () => {
           }))}
         />
       )}
+
     </div>
   );
 };

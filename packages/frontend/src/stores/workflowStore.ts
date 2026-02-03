@@ -42,12 +42,52 @@ const saveFavoritesToStorage = (favorites: Set<string>) => {
   }
 };
 
+// Helper function to check if two nodes overlap
+const nodesOverlap = (pos1: { x: number; y: number }, pos2: { x: number; y: number }, nodeWidth = 220, nodeHeight = 120, padding = 40): boolean => {
+  const xOverlap = Math.abs(pos1.x - pos2.x) < (nodeWidth + padding);
+  const yOverlap = Math.abs(pos1.y - pos2.y) < (nodeHeight + padding);
+  return xOverlap && yOverlap;
+};
+
+// Helper function to find non-overlapping position
+const findNonOverlappingPosition = (desiredPosition: { x: number; y: number }, existingNodes: Node[]): { x: number; y: number } => {
+  let position = { ...desiredPosition };
+  let attempts = 0;
+  const maxAttempts = 50;
+  
+  while (attempts < maxAttempts) {
+    const hasOverlap = existingNodes.some(node => 
+      nodesOverlap(position, node.position)
+    );
+    
+    if (!hasOverlap) {
+      return position;
+    }
+    
+    // Try different positions in a spiral pattern
+    const angle = (attempts * 0.5) * Math.PI;
+    const distance = 100 + (attempts * 30);
+    position = {
+      x: desiredPosition.x + Math.cos(angle) * distance,
+      y: desiredPosition.y + Math.sin(angle) * distance
+    };
+    
+    attempts++;
+  }
+  
+  // If we couldn't find a spot, just offset to the right and down
+  return {
+    x: desiredPosition.x + (existingNodes.length * 50),
+    y: desiredPosition.y + (existingNodes.length * 50)
+  };
+};
+
 interface WorkflowStore {
   // Workflow metadata
   workflowId?: string;
   workflowName: string;
   workflowDescription?: string;
-  workflowStatus: 'ACTIVE' | 'INACTIVE' | 'ERROR';
+  workflowStatus: 'ACTIVE' | 'INACTIVE' | 'DRAFT' | 'ERROR';
 
   // Flow state
   nodes: Node[];
@@ -92,6 +132,7 @@ interface WorkflowStore {
   copySelectedNodes: () => void;
   pasteNodes: () => void;
   duplicateSelectedNodes: () => void;
+  duplicateNode: (nodeId: string) => void;
   
   // Selection operations
   selectAllNodes: () => void;
@@ -110,6 +151,12 @@ interface WorkflowStore {
   addNodeFromPendingEdge: (pendingEdgeId: string, nodeType: string) => void;
   removePendingEdge: (pendingEdgeId: string) => void;
 
+  // Insert node on regular edge
+  insertNodeOnEdge: (edgeId: string, nodeType: string, position: { x: number; y: number }) => void;
+
+  // Add workflow as subworkflow
+  addWorkflowAsSubworkflow: (workflow: Workflow, position: { x: number; y: number }) => void;
+
   // Convert to API format
   toWorkflowData: () => Omit<Workflow, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -119,7 +166,7 @@ interface WorkflowStore {
 
 export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   workflowName: 'Untitled Workflow',
-  workflowStatus: 'INACTIVE',
+  workflowStatus: 'DRAFT',
   nodes: [],
   edges: [],
   pendingEdges: [],
@@ -173,10 +220,13 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       return;
     }
 
+    // Find non-overlapping position
+    const adjustedPosition = findNonOverlappingPosition(position, get().nodes);
+
     const newNode: Node = {
       id: uuidv4(),
       type: 'custom',
-      position,
+      position: adjustedPosition,
       data: {
         type: nodeType.name,
         name: nodeType.displayName,
@@ -189,39 +239,33 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
     // Create pending edges for all output handles if node has outputs
     if (nodeType.outputs && nodeType.outputs.length > 0) {
-      console.log('[WorkflowStore] Creating pending edges for outputs:', nodeType.outputs);
       nodeType.outputs.forEach((output, index) => {
+        const desiredPosition = {
+          x: adjustedPosition.x + 300,
+          y: adjustedPosition.y + (index * 60) // Offset each pending edge vertically
+        };
         const pendingEdge: PendingEdge = {
           id: uuidv4(),
           sourceNodeId: newNode.id,
           sourceHandle: output.name || 'default',
-          position: {
-            x: position.x + 300,
-            y: position.y + (index * 60) // Offset each pending edge vertically
-          }
+          position: desiredPosition
         };
         newPendingEdges.push(pendingEdge);
       });
     } else {
-      console.log('[WorkflowStore] No outputs found, creating default pending edge');
       // If no outputs metadata, create a single default pending edge
+      const desiredPosition = {
+        x: adjustedPosition.x + 300,
+        y: adjustedPosition.y
+      };
       const pendingEdge: PendingEdge = {
         id: uuidv4(),
         sourceNodeId: newNode.id,
         sourceHandle: 'default',
-        position: {
-          x: position.x + 300,
-          y: position.y
-        }
+        position: desiredPosition
       };
       newPendingEdges.push(pendingEdge);
     }
-
-    console.log('[WorkflowStore] Adding node with pending edges:', {
-      node: newNode,
-      pendingEdges: newPendingEdges,
-      totalPendingEdges: [...get().pendingEdges, ...newPendingEdges].length
-    });
 
     set({
       nodes: [...get().nodes, newNode],
@@ -264,11 +308,39 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   deleteNode: (nodeId) => {
+    const { edges, nodes, pendingEdges, selectedNode } = get();
+    
+    // Find all edges connected to the node being deleted
+    const incomingEdges = edges.filter(e => e.target === nodeId);
+    const outgoingEdges = edges.filter(e => e.source === nodeId);
+    
+    // Remove edges connected to this node
+    let updatedEdges = edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+    
+    // Auto-reconnect: If node has both incoming and outgoing edges, connect them
+    if (incomingEdges.length > 0 && outgoingEdges.length > 0) {
+      // For each incoming edge, connect it to the first outgoing edge's target
+      // This handles the simple case of a node in the middle of a chain
+      incomingEdges.forEach(inEdge => {
+        outgoingEdges.forEach(outEdge => {
+          const reconnectedEdge: Edge = {
+            id: uuidv4(),
+            source: inEdge.source,
+            sourceHandle: inEdge.sourceHandle,
+            target: outEdge.target,
+            targetHandle: outEdge.targetHandle,
+            type: 'default'
+          };
+          updatedEdges.push(reconnectedEdge);
+        });
+      });
+    }
+    
     set({
-      nodes: get().nodes.filter(n => n.id !== nodeId),
-      edges: get().edges.filter(e => e.source !== nodeId && e.target !== nodeId),
-      pendingEdges: get().pendingEdges.filter(pe => pe.sourceNodeId !== nodeId),
-      selectedNode: get().selectedNode?.id === nodeId ? null : get().selectedNode
+      nodes: nodes.filter(n => n.id !== nodeId),
+      edges: updatedEdges,
+      pendingEdges: pendingEdges.filter(pe => pe.sourceNodeId !== nodeId),
+      selectedNode: selectedNode?.id === nodeId ? null : selectedNode
     });
   },
 
@@ -320,23 +392,34 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     // Save current state before pasting
     get().saveToHistory();
     
-    // Create new nodes with new IDs and offset positions
+    // Create new nodes with new IDs and adjusted positions to avoid overlap
     const idMapping: Record<string, string> = {};
     const offset = { x: 50, y: 50 };
+    const allExistingNodes = [...nodes];
     
     const newNodes: Node[] = clipboard.map((node) => {
       const newId = uuidv4();
       idMapping[node.id] = newId;
       
-      return {
+      const desiredPosition = {
+        x: node.position.x + offset.x,
+        y: node.position.y + offset.y,
+      };
+      
+      // Find non-overlapping position for each pasted node
+      const adjustedPosition = findNonOverlappingPosition(desiredPosition, allExistingNodes);
+      
+      const newNode = {
         ...node,
         id: newId,
-        position: {
-          x: node.position.x + offset.x,
-          y: node.position.y + offset.y,
-        },
+        position: adjustedPosition,
         selected: true, // Select the pasted nodes
       };
+      
+      // Add to existing nodes list for next iteration
+      allExistingNodes.push(newNode);
+      
+      return newNode;
     });
     
     // Deselect all existing nodes
@@ -385,23 +468,34 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     // Save current state before duplicating
     get().saveToHistory();
     
-    // Create new nodes with new IDs and offset positions
+    // Create new nodes with new IDs and adjusted positions to avoid overlap
     const idMapping: Record<string, string> = {};
     const offset = { x: 50, y: 50 };
+    const allExistingNodes = [...nodes];
     
     const newNodes: Node[] = selectedNodes.map((node) => {
       const newId = uuidv4();
       idMapping[node.id] = newId;
       
-      return {
+      const desiredPosition = {
+        x: node.position.x + offset.x,
+        y: node.position.y + offset.y,
+      };
+      
+      // Find non-overlapping position for each duplicated node
+      const adjustedPosition = findNonOverlappingPosition(desiredPosition, allExistingNodes);
+      
+      const newNode = {
         ...JSON.parse(JSON.stringify(node)),
         id: newId,
-        position: {
-          x: node.position.x + offset.x,
-          y: node.position.y + offset.y,
-        },
+        position: adjustedPosition,
         selected: true,
       };
+      
+      // Add to existing nodes list for next iteration
+      allExistingNodes.push(newNode);
+      
+      return newNode;
     });
     
     // Deselect original nodes
@@ -426,6 +520,76 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set({
       nodes: [...updatedNodes, ...newNodes],
       edges: [...edges, ...newEdges],
+    });
+  },
+
+  // Duplicate a single node by ID
+  duplicateNode: (nodeId) => {
+    const { nodes } = get();
+    const nodeToDuplicate = nodes.find(n => n.id === nodeId);
+    
+    if (!nodeToDuplicate) return;
+    
+    // Save current state before duplicating
+    get().saveToHistory();
+    
+    const offset = { x: 50, y: 50 };
+    const desiredPosition = {
+      x: nodeToDuplicate.position.x + offset.x,
+      y: nodeToDuplicate.position.y + offset.y,
+    };
+    
+    // Find non-overlapping position
+    const adjustedPosition = findNonOverlappingPosition(desiredPosition, nodes);
+    
+    const newNode: Node = {
+      ...JSON.parse(JSON.stringify(nodeToDuplicate)),
+      id: uuidv4(),
+      position: adjustedPosition,
+      selected: true,
+    };
+    
+    // Deselect all existing nodes
+    const updatedNodes = nodes.map((node) => ({
+      ...node,
+      selected: false,
+    }));
+    
+    // Create pending edges for the new node if it has outputs
+    const newPendingEdges: PendingEdge[] = [];
+    const nodeMetadata = nodeToDuplicate.data?.metadata;
+    
+    if (nodeMetadata?.outputs && nodeMetadata.outputs.length > 0) {
+      nodeMetadata.outputs.forEach((output: any, index: number) => {
+        const desiredPendingPosition = {
+          x: adjustedPosition.x + 300,
+          y: adjustedPosition.y + (index * 60)
+        };
+        const newPendingEdge: PendingEdge = {
+          id: uuidv4(),
+          sourceNodeId: newNode.id,
+          sourceHandle: output.name || 'default',
+          position: desiredPendingPosition
+        };
+        newPendingEdges.push(newPendingEdge);
+      });
+    } else {
+      const desiredPendingPosition = {
+        x: adjustedPosition.x + 300,
+        y: adjustedPosition.y
+      };
+      const newPendingEdge: PendingEdge = {
+        id: uuidv4(),
+        sourceNodeId: newNode.id,
+        sourceHandle: 'default',
+        position: desiredPendingPosition
+      };
+      newPendingEdges.push(newPendingEdge);
+    }
+    
+    set({
+      nodes: [...updatedNodes, newNode],
+      pendingEdges: [...get().pendingEdges, ...newPendingEdges]
     });
   },
 
@@ -514,11 +678,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const nodeMetadata = get().nodeTypes.find(nt => nt.name === nodeType);
     if (!nodeMetadata) return;
 
-    // Create new node at the pending edge target position
+    // Find non-overlapping position near the pending edge target
+    const adjustedPosition = findNonOverlappingPosition(pendingEdge.position, get().nodes);
+
+    // Create new node at the adjusted position
     const newNode: Node = {
       id: uuidv4(),
       type: 'custom',
-      position: pendingEdge.position,
+      position: adjustedPosition,
       data: {
         type: nodeMetadata.name,
         name: nodeMetadata.displayName,
@@ -545,27 +712,29 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const newPendingEdges: PendingEdge[] = [];
     if (nodeMetadata.outputs && nodeMetadata.outputs.length > 0) {
       nodeMetadata.outputs.forEach((output, index) => {
+        const desiredPendingPosition = {
+          x: adjustedPosition.x + 300,
+          y: adjustedPosition.y + (index * 60)
+        };
         const newPendingEdge: PendingEdge = {
           id: uuidv4(),
           sourceNodeId: newNode.id,
           sourceHandle: output.name || 'default',
-          position: {
-            x: pendingEdge.position.x + 300,
-            y: pendingEdge.position.y + (index * 60)
-          }
+          position: desiredPendingPosition
         };
         newPendingEdges.push(newPendingEdge);
       });
     } else {
       // Create default pending edge if no outputs metadata
+      const desiredPendingPosition = {
+        x: adjustedPosition.x + 300,
+        y: adjustedPosition.y
+      };
       const newPendingEdge: PendingEdge = {
         id: uuidv4(),
         sourceNodeId: newNode.id,
         sourceHandle: 'default',
-        position: {
-          x: pendingEdge.position.x + 300,
-          y: pendingEdge.position.y
-        }
+        position: desiredPendingPosition
       };
       newPendingEdges.push(newPendingEdge);
     }
@@ -584,6 +753,135 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   removePendingEdge: (pendingEdgeId) => {
     set({
       pendingEdges: get().pendingEdges.filter(pe => pe.id !== pendingEdgeId)
+    });
+  },
+
+  // Insert node on regular edge
+  insertNodeOnEdge: (edgeId, nodeType, position) => {
+    const edge = get().edges.find(e => e.id === edgeId);
+    if (!edge) return;
+
+    const nodeMetadata = get().nodeTypes.find(nt => nt.name === nodeType);
+    if (!nodeMetadata) return;
+
+    // Find non-overlapping position
+    const adjustedPosition = findNonOverlappingPosition(position, get().nodes);
+
+    // Create new node at the adjusted position
+    const newNode: Node = {
+      id: uuidv4(),
+      type: 'custom',
+      position: adjustedPosition,
+      data: {
+        type: nodeMetadata.name,
+        name: nodeMetadata.displayName,
+        parameters: {},
+        metadata: nodeMetadata
+      }
+    };
+
+    // Get the input and output handles for the new node
+    const newNodeInputHandle = nodeMetadata.inputs && nodeMetadata.inputs.length > 0
+      ? nodeMetadata.inputs[0].name || 'default'
+      : 'default';
+    
+    const newNodeOutputHandle = nodeMetadata.outputs && nodeMetadata.outputs.length > 0
+      ? nodeMetadata.outputs[0].name || 'default'
+      : 'default';
+
+    // Create edge from source to new node
+    const edgeToNewNode: Edge = {
+      id: uuidv4(),
+      source: edge.source,
+      target: newNode.id,
+      sourceHandle: edge.sourceHandle,
+      targetHandle: newNodeInputHandle
+    };
+
+    // Create edge from new node to original target
+    const edgeFromNewNode: Edge = {
+      id: uuidv4(),
+      source: newNode.id,
+      target: edge.target,
+      sourceHandle: newNodeOutputHandle,
+      targetHandle: edge.targetHandle
+    };
+
+    // Create pending edges for the new node's other outputs (if any)
+    const newPendingEdges: PendingEdge[] = [];
+    if (nodeMetadata.outputs && nodeMetadata.outputs.length > 1) {
+      // Skip the first output since it's already connected
+      nodeMetadata.outputs.slice(1).forEach((output, index) => {
+        const desiredPendingPosition = {
+          x: adjustedPosition.x + 300,
+          y: adjustedPosition.y + ((index + 1) * 60)
+        };
+        const newPendingEdge: PendingEdge = {
+          id: uuidv4(),
+          sourceNodeId: newNode.id,
+          sourceHandle: output.name || 'default',
+          position: desiredPendingPosition
+        };
+        newPendingEdges.push(newPendingEdge);
+      });
+    }
+
+    // Remove the old edge and add the new node and edges
+    const updatedEdges = get().edges.filter(e => e.id !== edgeId);
+
+    set({
+      nodes: [...get().nodes, newNode],
+      edges: [...updatedEdges, edgeToNewNode, edgeFromNewNode],
+      pendingEdges: [...get().pendingEdges, ...newPendingEdges]
+    });
+  },
+
+  // Add workflow as a subworkflow node
+  addWorkflowAsSubworkflow: (workflow, position) => {
+    // Find non-overlapping position
+    const adjustedPosition = findNonOverlappingPosition(position, get().nodes);
+
+    // Create a special node representing the subworkflow
+    const newNode: Node = {
+      id: uuidv4(),
+      type: 'custom',
+      position: adjustedPosition,
+      data: {
+        type: 'subworkflow',
+        name: workflow.name,
+        parameters: {
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          description: workflow.description
+        },
+        metadata: {
+          name: 'subworkflow',
+          displayName: workflow.name,
+          description: workflow.description || 'Execute another workflow',
+          icon: '📋',
+          category: 'action',
+          version: 1,
+          parameters: [],
+          inputs: [{ name: 'default', type: 'any' }],
+          outputs: [{ name: 'default', type: 'any' }]
+        }
+      }
+    };
+
+    // Create pending edge for the subworkflow node
+    const pendingEdge: PendingEdge = {
+      id: uuidv4(),
+      sourceNodeId: newNode.id,
+      sourceHandle: 'default',
+      position: {
+        x: adjustedPosition.x + 300,
+        y: adjustedPosition.y
+      }
+    };
+
+    set({
+      nodes: [...get().nodes, newNode],
+      pendingEdges: [...get().pendingEdges, pendingEdge]
     });
   },
 
